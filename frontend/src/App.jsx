@@ -13,6 +13,7 @@ export default function App() {
   const [currentTurn, setCurrentTurn] = useState(null);
   const [mySymbol, setMySymbol] = useState(null);
   const [gameId, setGameId] = useState(null);
+  const [leaderboard, setLeaderboard] = useState([]);
 
   function handleColumnClick(col) {
     if (currentTurn !== mySymbol) return;
@@ -68,6 +69,15 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    fetch("http://localhost:3000/leaderboard")
+      .then((res) => res.json())
+      .then((data) => setLeaderboard(data))
+      .catch((err) => {
+        console.error("Failed to fetch leaderboard", err);
+      });
+  }, []);
+
   return (
     <div className="app">
       <h1>4 in a Row</h1>
@@ -79,6 +89,21 @@ export default function App() {
       </div>
 
       <Board board={board} onColumnClick={handleColumnClick} />
+      <div className="leaderboard">
+        <h2>Leaderboard</h2>
+
+        {leaderboard.length === 0 ? (
+          <p>No games played yet</p>
+        ) : (
+          <ol>
+            {leaderboard.map((entry, index) => (
+              <li key={index}>
+                {entry.player} — {entry.wins} wins
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
     </div>
   );
 }

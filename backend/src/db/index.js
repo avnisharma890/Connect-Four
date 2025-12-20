@@ -5,5 +5,3 @@ const pool = new Pool({
 });
 
 module.exports = pool;
-
-// echo %DATABASE_URL%

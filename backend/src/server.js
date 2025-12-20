@@ -1,5 +1,6 @@
 const express = require("express");
 const http = require("http");
+const cors = require("cors");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 
@@ -11,6 +12,12 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" },
 });
+
+app.use(cors({
+  origin: "http://localhost:5173",
+}));
+app.use(express.json());
+app.use("/leaderboard", require("./routes/leaderboard"));
 
 const reconnectingSockets = new Set();
 const reconnectTimers = new Map(); // gameId -> timeout
