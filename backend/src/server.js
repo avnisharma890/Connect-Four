@@ -4,9 +4,6 @@ const cors = require("cors");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 
-const Game = require("./game/Game");
-const { saveFinishedGame } = require("./services/gameService");
-
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -19,6 +16,11 @@ app.use(cors({
 app.use(express.json());
 app.use("/leaderboard", require("./routes/leaderboard"));
 
+const Game = require("./game/Game");
+const { saveFinishedGame } = require("./services/gameService");
+const { initProducer } = require("./kafka/producer");
+const analytics = require("./services/analyticsService");
+
 const reconnectingSockets = new Set();
 const reconnectTimers = new Map(); // gameId -> timeout
 
@@ -28,6 +30,8 @@ let waitingTimeout = null;
 const games = new Map();          // gameId -> Game
 const socketToGame = new Map();   // socket.id -> gameId
 const playerSymbols = new Map();  // socket.id -> "X" | "O"
+
+initProducer(); // initialize kafka producer ONCE
 
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
@@ -59,6 +63,9 @@ io.on("connection", (socket) => {
         const game = new Game(username, "BOT");
 
         games.set(gameId, game);
+
+        analytics.gameStarted(gameId, [game.players.X, game.players.O]);  // Kafka analytics
+
         socketToGame.set(waitingSocketId, gameId);
         playerSymbols.set(waitingSocketId, "X");
 
@@ -86,6 +93,8 @@ io.on("connection", (socket) => {
     const game = new Game(p1.username, p2.username);
 
     games.set(gameId, game);
+
+    analytics.gameStarted(gameId, [game.players.X, game.players.O]);  // Kafka analytics
 
     socketToGame.set(p1.socket.id, gameId);
     socketToGame.set(p2.socket.id, gameId);
@@ -121,13 +130,16 @@ io.on("connection", (socket) => {
     try {
       const state = game.makeMove(symbol, column);
 
+      analytics.moveMade(gameId, symbol, column);  // Kafka analytics
+
       // 1. Broadcast updated state to the room
       io.to(gameId).emit("gameState", state);
 
       // 2. Persist & cleanup if game finished
       if (state.status === "FINISHED") {
-        await saveFinishedGame(gameId, game);
-        games.delete(gameId);
+        analytics.gameFinished(gameId, state.winner, game.startedAt);  // Kafka analytics
+        await saveFinishedGame(gameId, game);  // DB persistence
+        games.delete(gameId);  // Cleanup
       }
 
     } catch (err) {
