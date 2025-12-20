@@ -4,12 +4,16 @@ const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 
 const Game = require("./game/Game");
+const { saveFinishedGame } = require("./services/gameService");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" },
 });
+
+const reconnectingSockets = new Set();
+const reconnectTimers = new Map(); // gameId -> timeout
 
 let waitingPlayer = null;
 let waitingTimeout = null;
@@ -22,6 +26,10 @@ io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
 
   socket.on("join", ({ username }) => {
+      if (reconnectingSockets.has(socket.id)) {
+        return;  // BLOCK matchmaking if reconnect is in progress
+    }
+
     console.log("User joined:", username);
 
     // WAITING
@@ -96,7 +104,7 @@ io.on("connection", (socket) => {
   });
 
   // GAMEPLAY
-  socket.on("makeMove", ({ column }) => {
+  socket.on("makeMove", async ({ column }) => {
     const gameId = socketToGame.get(socket.id);
     const symbol = playerSymbols.get(socket.id);
     const game = games.get(gameId);
@@ -105,7 +113,16 @@ io.on("connection", (socket) => {
 
     try {
       const state = game.makeMove(symbol, column);
+
+      // 1. Broadcast updated state to the room
       io.to(gameId).emit("gameState", state);
+
+      // 2. Persist & cleanup if game finished
+      if (state.status === "FINISHED") {
+        await saveFinishedGame(gameId, game);
+        games.delete(gameId);
+      }
+
     } catch (err) {
       socket.emit("error", err.message);
     }
@@ -115,14 +132,88 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
 
+    const gameId = socketToGame.get(socket.id);
+    const symbol = playerSymbols.get(socket.id);
+    const game = games.get(gameId);
+
     socketToGame.delete(socket.id);
     playerSymbols.delete(socket.id);
 
+    // If player was waiting in lobby
     if (waitingPlayer?.socket.id === socket.id) {
       clearTimeout(waitingTimeout);
       waitingPlayer = null;
       waitingTimeout = null;
+      return;
     }
+
+    if (!game || !symbol) return;
+
+    // Mark player as disconnected
+    game.disconnected[symbol] = true;
+
+    // Start 30s reconnect timer
+    const timeout = setTimeout(() => {
+      console.log("Reconnect window expired");
+
+      game.status = "FINISHED";
+      const winnerSymbol = symbol === "X" ? "O" : "X";
+      game.winner = game.players[winnerSymbol];
+
+      io.to(gameId).emit("gameOver", {
+        winner: game.winner,
+        reason: "forfeit",
+      });
+
+      games.delete(gameId);
+      reconnectTimers.delete(gameId);
+    }, 30000);
+
+    reconnectTimers.set(gameId, timeout);
+  });
+
+  // REJOIN
+  socket.on("rejoin", ({ gameId, username }) => {
+    reconnectingSockets.add(socket.id);
+
+    const game = games.get(gameId);
+    if (!game) {
+      socket.emit("rejoinFailed");
+      reconnectingSockets.delete(socket.id);
+      return;
+    }
+
+    let symbol = null;
+    if (game.players.X === username) symbol = "X";
+    if (game.players.O === username) symbol = "O";
+    if (!symbol) {
+      socket.emit("rejoinFailed");
+      reconnectingSockets.delete(socket.id);
+      return;
+    }
+
+    // cancel forfeit timer
+    const timer = reconnectTimers.get(gameId);
+    if (timer) {
+      clearTimeout(timer);
+      reconnectTimers.delete(gameId);
+    }
+
+    socketToGame.set(socket.id, gameId);
+    playerSymbols.set(socket.id, symbol);
+    game.disconnected[symbol] = false;
+
+    socket.join(gameId);
+
+    socket.emit("gameStart", {
+      symbol,
+      state: game.getState(),
+      gameId,
+    });
+
+    reconnectingSockets.delete(socket.id);
+
+    console.log("Player rejoined:", username);
   });
 });
 

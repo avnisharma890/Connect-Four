@@ -11,48 +11,59 @@ export default function App() {
   );
   const [status, setStatus] = useState("WAITING");
   const [currentTurn, setCurrentTurn] = useState(null);
-  const [mySymbol, setMySymbol] = useState(null); // 🔑 NEW
+  const [mySymbol, setMySymbol] = useState(null);
+  const [gameId, setGameId] = useState(null);
 
   function handleColumnClick(col) {
-  // Block clicks if it's not your turn
     if (currentTurn !== mySymbol) return;
-
     socket.emit("makeMove", { column: col });
   }
 
   useEffect(() => {
-    socket.emit("join", { username: "player" });
-
-    // Fired once when game is created
-    socket.on("gameStart", ({ symbol, state }) => {
+    socket.on("gameStart", ({ symbol, state, gameId }) => {
       setMySymbol(symbol);
       setBoard(state.board);
       setStatus(state.status);
       setCurrentTurn(state.currentTurn);
+      setGameId(gameId);
+
+      sessionStorage.setItem("wasInGame", "true");
+      localStorage.setItem(
+        "reconnect",
+        JSON.stringify({ gameId, username: "player" })
+      );
     });
 
-    // Fired on every move
     socket.on("gameState", (state) => {
       setBoard(state.board);
       setStatus(state.status);
       setCurrentTurn(state.currentTurn);
     });
 
+    socket.on("rejoinFailed", () => {
+      sessionStorage.removeItem("wasInGame");
+      localStorage.removeItem("reconnect");
+      socket.emit("join", { username: "player" });
+    });
+
     socket.on("error", (msg) => {
       alert(msg);
     });
 
-    socket.on("gameStart", ({ symbol, state }) => {
-    console.log("GAME START", symbol, state);
-    setMySymbol(symbol);
-    setBoard(state.board);
-    setStatus(state.status);
-    setCurrentTurn(state.currentTurn);
-  });
+    const saved = localStorage.getItem("reconnect");
+    const wasInGame = sessionStorage.getItem("wasInGame");
+
+    if (saved && wasInGame === "true") {
+      const { gameId, username } = JSON.parse(saved);
+      socket.emit("rejoin", { gameId, username });
+    } else {
+      socket.emit("join", { username: "player" });
+    }
 
     return () => {
       socket.off("gameStart");
       socket.off("gameState");
+      socket.off("rejoinFailed");
       socket.off("error");
     };
   }, []);
@@ -67,9 +78,7 @@ export default function App() {
         <p>Turn: {currentTurn ?? "-"}</p>
       </div>
 
-      {board && (
-        <Board board={board} onColumnClick={handleColumnClick} />
-      )}
+      <Board board={board} onColumnClick={handleColumnClick} />
     </div>
   );
 }

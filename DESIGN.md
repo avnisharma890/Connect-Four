@@ -170,9 +170,23 @@ Kafka ensures analytics are decoupled from gameplay and do not impact latency.
 
 ---
 
+## Schema
+
+games
+* id (UUID)
+* player_x (TEXT)
+* player_o (TEXT)
+* winner (TEXT | NULL)
+* status (FINISHED)
+* started_at
+* finished_at
+
+---
+
 ## Future Extensions
 
 * Reconnect within 30 seconds using gameId
 * Persistent storage for completed games
 * Leaderboard service
 * Horizontal scaling with shared state
+

@@ -1,23 +1,3 @@
-// check for :
-
-// Whose turn is it?
-// Is this move allowed?
-// Did the move end the game?
-// What is the current state?
-
-// states :
-
-// - board
-// - players (X / O)
-// - currentTurn
-// - status (ACTIVE / FINISHED)
-// - winner (null | username)
-
-// behavior : 
-
-// makeMove(playerSymbol, column)
-// getState()
-
 const { getBotMove } = require("../logic/bot");
 
 const {
@@ -29,6 +9,7 @@ const {
 
 class Game {
   constructor(playerX, playerO) {
+    this.startedAt = new Date();
     this.board = createBoard();
     this.players = {
       X: playerX,
@@ -37,6 +18,10 @@ class Game {
     this.currentTurn = "X";
     this.status = "ACTIVE";
     this.winner = null;
+    this.disconnected = {
+      X: false,
+      O: false,
+    };
   }
 
   makeMove(symbol, column) {
