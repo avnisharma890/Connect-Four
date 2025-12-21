@@ -7,20 +7,24 @@ async function saveFinishedGame(gameId, game) {
       id,
       player_x,
       player_o,
-      winner,
+      winner_player_id,
+      winner_display_name,
       status,
       started_at,
       finished_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+
     `,
     [
       gameId,
-      game.players.X,
-      game.players.O,
-      game.winner,
+      game.players.X.username,
+      game.players.O.username,
+      game.winner.playerId,
+      game.winner.displayName,
       game.status,
-      game.startedAt,
+      new Date(game.startedAt),
+      new Date()
     ]
   );
 }

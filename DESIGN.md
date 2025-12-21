@@ -185,8 +185,4 @@ games
 
 ## Future Extensions
 
-* Reconnect within 30 seconds using gameId
-* Persistent storage for completed games
-* Leaderboard service
 * Horizontal scaling with shared state
-

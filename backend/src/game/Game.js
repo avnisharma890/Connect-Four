@@ -9,7 +9,7 @@ const {
 
 class Game {
   constructor(playerX, playerO) {
-    this.startedAt = new Date();
+    this.startedAt = Date.now();
     this.board = createBoard();
     this.players = {
       X: playerX,
@@ -40,7 +40,14 @@ class Game {
 
     if (checkWin(this.board, move.row, move.col, symbol)) {
       this.status = "FINISHED";
-      this.winner = this.players[symbol];
+      this.winner = {
+      playerId: this.players[symbol].playerId,
+      displayName:
+        this.players[symbol].username !== "guest"
+          ? this.players[symbol].username
+          : this.players[symbol].playerId.slice(0, 8),
+    };
+
     } else if (isDraw(this.board)) {
       this.status = "FINISHED";
     } else {
@@ -51,7 +58,7 @@ class Game {
     // BOT auto-play AFTER turn switch
     if (
       this.status === "ACTIVE" &&
-      this.players[this.currentTurn] === "BOT"
+      this.players[this.currentTurn].playerId === "BOT"
     ) {
       const botSymbol = this.currentTurn;
       const playerSymbol = botSymbol === "X" ? "O" : "X";

@@ -4,7 +4,9 @@ import Board from "./Board";
 import { v4 as uuidv4 } from "uuid";
 import "./styles.css";
 
-// Single persistent socket connection
+/**
+ * Socket is created ONCE for the app lifetime
+ */
 const socket = io("http://localhost:3000");
 
 export default function App() {
@@ -21,8 +23,7 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
 
   /**
-   * STABLE PLAYER ID
-   * Generated once and reused across refreshes
+   * SESSION IDENTITY (per-tab)
    */
   const storedPlayerId = sessionStorage.getItem("playerId");
   const playerId = storedPlayerId ?? uuidv4();
@@ -32,8 +33,13 @@ export default function App() {
   }
 
   /**
-   * HANDLE MOVE
-   * Client never sends symbol, only intent
+   * USERNAME (asked once per tab)
+   */
+  const storedUsername = sessionStorage.getItem("username") || "guest";
+  const [username, setUsername] = useState(storedUsername || "");
+
+  /**
+   * MOVE HANDLER
    */
   function handleColumnClick(col) {
     if (currentTurn !== mySymbol) return;
@@ -42,7 +48,7 @@ export default function App() {
 
   /**
    * SOCKET LIFECYCLE
-   * Handles join, rejoin, gameplay updates
+   * Runs once, emits only after identity exists
    */
   useEffect(() => {
     // Game created OR successfully rejoined
@@ -53,14 +59,9 @@ export default function App() {
       setCurrentTurn(state.currentTurn);
       setGameId(gameId);
 
-      // Persist reconnect metadata
       sessionStorage.setItem(
         "reconnect",
-        JSON.stringify({
-          gameId,
-          username: "player",
-          playerId,
-        })
+        JSON.stringify({ gameId, username, playerId })
       );
     });
 
@@ -71,34 +72,13 @@ export default function App() {
       setCurrentTurn(state.currentTurn);
     });
 
-    // Server rejected reconnect attempt
+    // Reconnect rejected → fresh join
     socket.on("rejoinFailed", () => {
       sessionStorage.removeItem("reconnect");
-      socket.emit("join", {
-        username: "player",
-        playerId,
-      });
+      socket.emit("join", { username, playerId });
     });
 
-    socket.on("error", (msg) => {
-      alert(msg);
-    });
-
-    /**
-     * INITIAL CONNECTION LOGIC
-     * Attempt rejoin first, fallback to join
-     */
-    const saved = sessionStorage.getItem("reconnect");
-
-    if (saved) {
-      const { gameId, username, playerId } = JSON.parse(saved);
-      socket.emit("rejoin", { gameId, username, playerId });
-    } else {
-      socket.emit("join", {
-        username: "player",
-        playerId,
-      });
-    }
+    socket.on("error", (msg) => alert(msg));
 
     return () => {
       socket.off("gameStart");
@@ -106,20 +86,56 @@ export default function App() {
       socket.off("rejoinFailed");
       socket.off("error");
     };
-  }, [playerId]);
+  }, [username, playerId]);
 
   /**
-   * LEADERBOARD FETCH
-   * Read-only, not real-time
+   * JOIN / REJOIN — ONLY when username exists
+   */
+  useEffect(() => {
+    if (!username) return;
+
+    const saved = sessionStorage.getItem("reconnect");
+
+    if (saved) {
+      const { gameId } = JSON.parse(saved);
+      socket.emit("rejoin", { gameId, username, playerId });
+    } else {
+      socket.emit("join", { username, playerId });
+    }
+  }, [username, playerId]);
+
+  /**
+   * LEADERBOARD
    */
   useEffect(() => {
     fetch("http://localhost:3000/leaderboard")
       .then((res) => res.json())
-      .then((data) => setLeaderboard(data))
-      .catch((err) => {
-        console.error("Failed to fetch leaderboard", err);
-      });
+      .then(setLeaderboard)
+      .catch(() => {});
   }, []);
+
+  /**
+   * USERNAME PROMPT (shown ONCE)
+   */
+  if (!username) {
+    return (
+      <div className="app">
+        <h1>4 in a Row</h1>
+        <input
+          placeholder="Enter username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <button
+          onClick={() => {
+            sessionStorage.setItem("username", username);
+          }}
+        >
+          Start
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -135,14 +151,13 @@ export default function App() {
 
       <div className="leaderboard">
         <h2>Leaderboard</h2>
-
         {leaderboard.length === 0 ? (
           <p>No games played yet</p>
         ) : (
           <ol>
-            {leaderboard.map((entry, index) => (
-              <li key={index}>
-                {entry.player} — {entry.wins} wins
+            {leaderboard.map((e, i) => (
+              <li key={i}>
+                {e.player} — {e.wins} wins
               </li>
             ))}
           </ol>

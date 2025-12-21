@@ -24,7 +24,7 @@ function gameFinished(gameId, winner, startedAt) {
     type: "GAME_FINISHED",
     gameId,
     winner,
-    durationMs: Date.now() - startedAt.getTime(),
+    durationMs: Date.now() - startedAt,
     timestamp: Date.now(),
   });
 }

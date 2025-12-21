@@ -161,15 +161,20 @@ io.on("connection", (socket) => {
       // Emit analytics AFTER successful mutation
       analytics.moveMade(gameId, symbol, column);
 
-      // Broadcast updated state to both players
-      io.to(gameId).emit("gameState", state);
-
       // Persist and cleanup on game end
       if (state.status === "FINISHED") {
+        if (!games.has(gameId)) return;
+
         analytics.gameFinished(gameId, state.winner, game.startedAt);
         await saveFinishedGame(gameId, game);
         games.delete(gameId);
       }
+
+      // Broadcast updated state to both players
+      io.to(gameId).emit("gameState", state);
+      io.to(gameId).emit("gameOver", {
+        winner: state.winner,
+      });
     } catch (err) {
       socket.emit("error", err.message);
     }
@@ -201,6 +206,8 @@ io.on("connection", (socket) => {
 
     // Forfeit if player fails to reconnect in 30s
     const timeout = setTimeout(async () => {
+      if (!games.has(gameId)) return;
+
       game.status = "FINISHED";
 
       const winner =
@@ -209,7 +216,7 @@ io.on("connection", (socket) => {
           : game.players.X.username;
 
       game.winner = winner;
-
+      
       io.to(gameId).emit("gameState", game.getState());
       await saveFinishedGame(gameId, game);
       games.delete(gameId);

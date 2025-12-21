@@ -1,19 +1,16 @@
 const pool = require("../db");
 
-async function getLeaderboard(limit = 10) {
-  const { rows } = await pool.query(
-    `
-        SELECT winner AS player, COUNT(*) AS wins
-        FROM games
-        WHERE winner IS NOT NULL
-        GROUP BY winner
-        ORDER BY wins DESC
-        LIMIT $1
-    `,
-    [limit]
-  );
+async function getLeaderboard() {
+  const result = await pool.query(`
+    SELECT
+      winner_display_name AS player,
+      COUNT(*) AS wins
+    FROM games
+    GROUP BY winner_display_name
+    ORDER BY wins DESC
+  `);
 
-  return rows;
+  return result.rows;
 }
 
 module.exports = { getLeaderboard };
