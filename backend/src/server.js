@@ -6,13 +6,13 @@ const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const server = http.createServer(app);
+
+// Socket.IO server for real-time gameplay
 const io = new Server(server, {
   cors: { origin: "*" },
 });
 
-app.use(cors({
-  origin: "http://localhost:5173",
-}));
+app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json());
 app.use("/leaderboard", require("./routes/leaderboard"));
 
@@ -21,59 +21,77 @@ const { saveFinishedGame } = require("./services/gameService");
 const { initProducer } = require("./kafka/producer");
 const analytics = require("./services/analyticsService");
 
-const reconnectingSockets = new Set();
-const reconnectTimers = new Map(); // gameId -> timeout
+// Kafka producer is initialized once at server startup
+initProducer();
 
+/**
+ * MATCHMAKING STATE
+ * waitingPlayer holds a single player waiting for PvP
+ * waitingTimeout triggers bot fallback after 10s
+ */
 let waitingPlayer = null;
 let waitingTimeout = null;
 
-const games = new Map();          // gameId -> Game
-const socketToGame = new Map();   // socket.id -> gameId
-const playerSymbols = new Map();  // socket.id -> "X" | "O"
+/**
+ * IN-MEMORY AUTHORITATIVE STATE
+ * These maps are the backbone of identity & reconnection
+ */
+const games = new Map();              // gameId -> Game instance
+const socketToGame = new Map();       // socket.id -> gameId
+const socketToUsername = new Map();   // socket.id -> username (display only)
+const socketToPlayerId = new Map();   // socket.id -> playerId (identity)
+const playerSymbols = new Map();      // socket.id -> "X" | "O"
 
-initProducer(); // initialize kafka producer ONCE
+/**
+ * DISCONNECT GRACE TIMERS
+ * key = `${gameId}:${playerId}`
+ * Ensures per-player reconnect windows
+ */
+const disconnectTimers = new Map();
 
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
 
-  socket.on("join", ({ username }) => {
-      if (reconnectingSockets.has(socket.id)) {
-        return;  // BLOCK matchmaking if reconnect is in progress
-    }
+  /**
+   * JOIN
+   * Handles matchmaking for PvP or bot fallback
+   */
+  socket.on("join", ({ username, playerId }) => {
+    // Bind ephemeral socket to stable identity
+    socketToUsername.set(socket.id, username);
+    socketToPlayerId.set(socket.id, playerId);
 
-    console.log("User joined:", username);
-
-    // WAITING
+    // If no one is waiting, place player in lobby
     if (!waitingPlayer) {
-      waitingPlayer = { socket, username };
+      waitingPlayer = { socket, username, playerId };
       const waitingSocketId = socket.id;
 
+      // Bot fallback after 10 seconds
       waitingTimeout = setTimeout(() => {
-        // race-condition guard
-        if (
-          !waitingPlayer ||
-          waitingPlayer.socket.id !== waitingSocketId
-        ) {
+        // Guard against race conditions
+        if (!waitingPlayer || waitingPlayer.socket.id !== waitingSocketId) {
           return;
         }
 
-        console.log("No opponent found. Starting BOT game.");
-
         const gameId = uuidv4();
-        const game = new Game(username, "BOT");
+
+        // Player vs Bot game
+        const game = new Game(
+          { username, playerId },
+          { username: "BOT", playerId: "BOT" }
+        );
 
         games.set(gameId, game);
+        analytics.gameStarted(gameId, [game.players.X, game.players.O]);
 
-        analytics.gameStarted(gameId, [game.players.X, game.players.O]);  // Kafka analytics
-
-        socketToGame.set(waitingSocketId, gameId);
-        playerSymbols.set(waitingSocketId, "X");
+        socketToGame.set(socket.id, gameId);
+        playerSymbols.set(socket.id, "X");
 
         socket.join(gameId);
-
         socket.emit("gameStart", {
           symbol: "X",
           state: game.getState(),
+          gameId,
         });
 
         waitingPlayer = null;
@@ -83,18 +101,22 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // PAIR WITH PLAYER
+    /**
+     * PAIR WITH WAITING PLAYER (PvP)
+     */
     clearTimeout(waitingTimeout);
 
     const p1 = waitingPlayer;
-    const p2 = { socket, username };
+    const p2 = { socket, username, playerId };
 
     const gameId = uuidv4();
-    const game = new Game(p1.username, p2.username);
+    const game = new Game(
+      { username: p1.username, playerId: p1.playerId },
+      { username: p2.username, playerId: p2.playerId }
+    );
 
     games.set(gameId, game);
-
-    analytics.gameStarted(gameId, [game.players.X, game.players.O]);  // Kafka analytics
+    analytics.gameStarted(gameId, [game.players.X, game.players.O]);
 
     socketToGame.set(p1.socket.id, gameId);
     socketToGame.set(p2.socket.id, gameId);
@@ -108,18 +130,23 @@ io.on("connection", (socket) => {
     p1.socket.emit("gameStart", {
       symbol: "X",
       state: game.getState(),
+      gameId,
     });
 
     p2.socket.emit("gameStart", {
       symbol: "O",
       state: game.getState(),
+      gameId,
     });
 
     waitingPlayer = null;
     waitingTimeout = null;
   });
 
-  // GAMEPLAY
+  /**
+   * GAMEPLAY
+   * Validates moves, updates state, emits updates
+   */
   socket.on("makeMove", async ({ column }) => {
     const gameId = socketToGame.get(socket.id);
     const symbol = playerSymbols.get(socket.id);
@@ -128,111 +155,115 @@ io.on("connection", (socket) => {
     if (!game || !symbol) return;
 
     try {
+      // Authoritative game mutation
       const state = game.makeMove(symbol, column);
 
-      analytics.moveMade(gameId, symbol, column);  // Kafka analytics
+      // Emit analytics AFTER successful mutation
+      analytics.moveMade(gameId, symbol, column);
 
-      // 1. Broadcast updated state to the room
+      // Broadcast updated state to both players
       io.to(gameId).emit("gameState", state);
 
-      // 2. Persist & cleanup if game finished
+      // Persist and cleanup on game end
       if (state.status === "FINISHED") {
-        analytics.gameFinished(gameId, state.winner, game.startedAt);  // Kafka analytics
-        await saveFinishedGame(gameId, game);  // DB persistence
-        games.delete(gameId);  // Cleanup
+        analytics.gameFinished(gameId, state.winner, game.startedAt);
+        await saveFinishedGame(gameId, game);
+        games.delete(gameId);
       }
-
     } catch (err) {
       socket.emit("error", err.message);
     }
   });
 
-  // DISCONNECT
+  /**
+   * DISCONNECT
+   * Starts a 30s grace period for reconnection
+   */
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
 
     const gameId = socketToGame.get(socket.id);
-    const symbol = playerSymbols.get(socket.id);
-    const game = games.get(gameId);
+    const username = socketToUsername.get(socket.id);
+    const playerId = socketToPlayerId.get(socket.id);
 
+    // Cleanup socket-scoped state
     socketToGame.delete(socket.id);
+    socketToUsername.delete(socket.id);
+    socketToPlayerId.delete(socket.id);
     playerSymbols.delete(socket.id);
 
-    // If player was waiting in lobby
-    if (waitingPlayer?.socket.id === socket.id) {
-      clearTimeout(waitingTimeout);
-      waitingPlayer = null;
-      waitingTimeout = null;
-      return;
-    }
-
-    if (!game || !symbol) return;
-
-    // Mark player as disconnected
-    game.disconnected[symbol] = true;
-
-    // Start 30s reconnect timer
-    const timeout = setTimeout(() => {
-      console.log("Reconnect window expired");
-
-      game.status = "FINISHED";
-      const winnerSymbol = symbol === "X" ? "O" : "X";
-      game.winner = game.players[winnerSymbol];
-
-      io.to(gameId).emit("gameOver", {
-        winner: game.winner,
-        reason: "forfeit",
-      });
-
-      games.delete(gameId);
-      reconnectTimers.delete(gameId);
-    }, 30000);
-
-    reconnectTimers.set(gameId, timeout);
-  });
-
-  // REJOIN
-  socket.on("rejoin", ({ gameId, username }) => {
-    reconnectingSockets.add(socket.id);
+    if (!gameId || !playerId) return;
 
     const game = games.get(gameId);
-    if (!game) {
+    if (!game || game.status !== "ACTIVE") return;
+
+    const key = `${gameId}:${playerId}`;
+
+    // Forfeit if player fails to reconnect in 30s
+    const timeout = setTimeout(async () => {
+      game.status = "FINISHED";
+
+      const winner =
+        game.players.X.playerId === playerId
+          ? game.players.O.username
+          : game.players.X.username;
+
+      game.winner = winner;
+
+      io.to(gameId).emit("gameState", game.getState());
+      await saveFinishedGame(gameId, game);
+      games.delete(gameId);
+
+      disconnectTimers.delete(key);
+    }, 30000);
+
+    disconnectTimers.set(key, timeout);
+  });
+
+  /**
+   * REJOIN
+   * Reattaches a socket to an ACTIVE game using (gameId + playerId)
+   */
+  socket.on("rejoin", ({ gameId, username, playerId }) => {
+    const game = games.get(gameId);
+
+    if (!game || game.status !== "ACTIVE") {
       socket.emit("rejoinFailed");
-      reconnectingSockets.delete(socket.id);
       return;
     }
 
-    let symbol = null;
-    if (game.players.X === username) symbol = "X";
-    if (game.players.O === username) symbol = "O";
-    if (!symbol) {
+    if (
+      game.players.X.playerId !== playerId &&
+      game.players.O.playerId !== playerId
+    ) {
       socket.emit("rejoinFailed");
-      reconnectingSockets.delete(socket.id);
       return;
     }
 
-    // cancel forfeit timer
-    const timer = reconnectTimers.get(gameId);
+    const key = `${gameId}:${playerId}`;
+    const timer = disconnectTimers.get(key);
+
     if (timer) {
       clearTimeout(timer);
-      reconnectTimers.delete(gameId);
+      disconnectTimers.delete(key);
     }
 
-    socketToGame.set(socket.id, gameId);
-    playerSymbols.set(socket.id, symbol);
-    game.disconnected[symbol] = false;
-
     socket.join(gameId);
+
+    socketToGame.set(socket.id, gameId);
+    socketToUsername.set(socket.id, username);
+    socketToPlayerId.set(socket.id, playerId);
+
+    const symbol =
+      game.players.X.playerId === playerId ? "X" : "O";
+
+    playerSymbols.set(socket.id, symbol);
 
     socket.emit("gameStart", {
       symbol,
       state: game.getState(),
       gameId,
     });
-
-    reconnectingSockets.delete(socket.id);
-
-    console.log("Player rejoined:", username);
   });
 });
 

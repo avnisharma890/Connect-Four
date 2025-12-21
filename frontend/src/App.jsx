@@ -1,11 +1,16 @@
 import { io } from "socket.io-client";
 import { useEffect, useState } from "react";
 import Board from "./Board";
+import { v4 as uuidv4 } from "uuid";
 import "./styles.css";
 
+// Single persistent socket connection
 const socket = io("http://localhost:3000");
 
 export default function App() {
+  /**
+   * UI STATE
+   */
   const [board, setBoard] = useState(
     Array.from({ length: 6 }, () => Array(7).fill(null))
   );
@@ -15,12 +20,32 @@ export default function App() {
   const [gameId, setGameId] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
 
+  /**
+   * STABLE PLAYER ID
+   * Generated once and reused across refreshes
+   */
+  const storedPlayerId = sessionStorage.getItem("playerId");
+  const playerId = storedPlayerId ?? uuidv4();
+
+  if (!storedPlayerId) {
+    sessionStorage.setItem("playerId", playerId);
+  }
+
+  /**
+   * HANDLE MOVE
+   * Client never sends symbol, only intent
+   */
   function handleColumnClick(col) {
     if (currentTurn !== mySymbol) return;
     socket.emit("makeMove", { column: col });
   }
 
+  /**
+   * SOCKET LIFECYCLE
+   * Handles join, rejoin, gameplay updates
+   */
   useEffect(() => {
+    // Game created OR successfully rejoined
     socket.on("gameStart", ({ symbol, state, gameId }) => {
       setMySymbol(symbol);
       setBoard(state.board);
@@ -28,37 +53,51 @@ export default function App() {
       setCurrentTurn(state.currentTurn);
       setGameId(gameId);
 
-      sessionStorage.setItem("wasInGame", "true");
-      localStorage.setItem(
+      // Persist reconnect metadata
+      sessionStorage.setItem(
         "reconnect",
-        JSON.stringify({ gameId, username: "player" })
+        JSON.stringify({
+          gameId,
+          username: "player",
+          playerId,
+        })
       );
     });
 
+    // Fired on every valid move
     socket.on("gameState", (state) => {
       setBoard(state.board);
       setStatus(state.status);
       setCurrentTurn(state.currentTurn);
     });
 
+    // Server rejected reconnect attempt
     socket.on("rejoinFailed", () => {
-      sessionStorage.removeItem("wasInGame");
-      localStorage.removeItem("reconnect");
-      socket.emit("join", { username: "player" });
+      sessionStorage.removeItem("reconnect");
+      socket.emit("join", {
+        username: "player",
+        playerId,
+      });
     });
 
     socket.on("error", (msg) => {
       alert(msg);
     });
 
-    const saved = localStorage.getItem("reconnect");
-    const wasInGame = sessionStorage.getItem("wasInGame");
+    /**
+     * INITIAL CONNECTION LOGIC
+     * Attempt rejoin first, fallback to join
+     */
+    const saved = sessionStorage.getItem("reconnect");
 
-    if (saved && wasInGame === "true") {
-      const { gameId, username } = JSON.parse(saved);
-      socket.emit("rejoin", { gameId, username });
+    if (saved) {
+      const { gameId, username, playerId } = JSON.parse(saved);
+      socket.emit("rejoin", { gameId, username, playerId });
     } else {
-      socket.emit("join", { username: "player" });
+      socket.emit("join", {
+        username: "player",
+        playerId,
+      });
     }
 
     return () => {
@@ -67,8 +106,12 @@ export default function App() {
       socket.off("rejoinFailed");
       socket.off("error");
     };
-  }, []);
+  }, [playerId]);
 
+  /**
+   * LEADERBOARD FETCH
+   * Read-only, not real-time
+   */
   useEffect(() => {
     fetch("http://localhost:3000/leaderboard")
       .then((res) => res.json())
@@ -89,6 +132,7 @@ export default function App() {
       </div>
 
       <Board board={board} onColumnClick={handleColumnClick} />
+
       <div className="leaderboard">
         <h2>Leaderboard</h2>
 
