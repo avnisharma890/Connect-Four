@@ -186,3 +186,84 @@ games
 ## Future Extensions
 
 * Horizontal scaling with shared state
+
+---
+
+## Appendix — README Extracted Notes
+
+The following details were originally included in `README.md` and have been moved here for reference and deeper documentation.
+
+### High-Level Architecture (summary)
+
+**Backend**
+
+- Node.js + Express
+- Socket.IO for real-time gameplay
+- In-memory state for active games
+- PostgreSQL for completed games & leaderboard
+- Kafka for analytics events
+
+**Frontend**
+
+- React (Vite)
+- Minimal UI (logic-first, styling secondary)
+- Real-time updates via WebSockets
+
+### Matchmaking
+
+- Players join and enter a lobby (waiting state)
+- If another player joins within 10 seconds → PvP game starts
+- Otherwise → paired with a competitive bot
+- The lobby is race-condition safe and resets if a waiting player disconnects
+
+### Competitive Bot
+
+The bot is not random and prioritizes:
+
+1. Blocking an opponent’s immediate winning move
+2. Creating its own winning opportunities
+3. Valid fallback moves if no tactical move exists
+
+From the game engine’s perspective, the bot is treated as a regular player.
+
+### Reconnection
+
+- Each game has a stable `gameId`
+- Players have 30 seconds to reconnect before the game is forfeited
+- Rejoining within the timeout restores the exact game state
+
+### Leaderboard
+
+- Tracks number of wins per player
+- Derived from persisted game data
+- Exposed via REST endpoint for frontend consumption
+
+### Kafka Analytics
+
+- Events produced: `GAME_STARTED`, `MOVE_MADE`, `GAME_FINISHED`
+- Consumer computes metrics such as average game duration and most frequent winners
+- Analytics are decoupled and do not impact gameplay latency
+
+### Project Structure (reference)
+
+```
+backend/
+  src/
+    game/      # Core game engine
+    logic/     # Board + bot logic
+    routes/    # REST endpoints (leaderboard)
+    services/  # DB & analytics services
+    kafka/     # Producer / Consumer
+    db/        # PostgreSQL pool
+  server.js    # Main server entry
+Dockerfile
+docker-compose.yml
+
+frontend/
+  src/
+    App.jsx
+    Board.jsx
+    index.html
+```
+
+---

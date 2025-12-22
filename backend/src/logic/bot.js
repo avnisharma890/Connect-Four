@@ -16,10 +16,23 @@ function getValidColumns(board) {
   return valid;
 }
 
+function opponentCanWinNext(board, playerSymbol) {
+  const validColumns = getValidColumns(board);
+
+  for (const col of validColumns) {
+    const copy = cloneBoard(board);
+    const move = dropDisc(copy, col, playerSymbol);
+    if (move && checkWin(copy, move.row, move.col, playerSymbol)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getBotMove(board, botSymbol, playerSymbol) {
   const validColumns = getValidColumns(board);
 
-  // Try to win
+  // 1. Win immediately if possible
   for (const col of validColumns) {
     const copy = cloneBoard(board);
     const move = dropDisc(copy, col, botSymbol);
@@ -28,7 +41,7 @@ function getBotMove(board, botSymbol, playerSymbol) {
     }
   }
 
-  // Block player win
+  // 2. Block player's immediate win
   for (const col of validColumns) {
     const copy = cloneBoard(board);
     const move = dropDisc(copy, col, playerSymbol);
@@ -37,12 +50,22 @@ function getBotMove(board, botSymbol, playerSymbol) {
     }
   }
 
-  // Prefer center
+  // 3. Avoid moves that allow opponent to win next turn
+  for (const col of validColumns) {
+    const copy = cloneBoard(board);
+    dropDisc(copy, col, botSymbol);
+
+    if (!opponentCanWinNext(copy, playerSymbol)) {
+      return col;
+    }
+  }
+
+  // 4. Prefer center if safe
   if (validColumns.includes(3)) {
     return 3;
   }
 
-  // Fallback: first valid column
+  // 5. Fallback
   return validColumns[0] ?? null;
 }
 

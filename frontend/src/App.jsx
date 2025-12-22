@@ -1,3 +1,6 @@
+import { ToastContainer, toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+
 import { io } from "socket.io-client";
 import { useEffect, useState } from "react";
 import Board from "./Board";
@@ -7,7 +10,8 @@ import "./styles.css";
 /**
  * Socket is created ONCE for the app lifetime
  */
-const socket = io("http://localhost:3000");
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
+const socket = io(BACKEND_URL);
 
 export default function App() {
   /**
@@ -70,6 +74,12 @@ export default function App() {
       setBoard(state.board);
       setStatus(state.status);
       setCurrentTurn(state.currentTurn);
+
+      if (state.status === "FINISHED") {
+        // Game is over → session must not be reused
+        sessionStorage.removeItem("reconnect");
+        toast.success("Game finished!");
+      }
     });
 
     // Reconnect rejected → fresh join
@@ -78,7 +88,10 @@ export default function App() {
       socket.emit("join", { username, playerId });
     });
 
-    socket.on("error", (msg) => alert(msg));
+    // Server-side error (UI-only handling)
+    socket.on("error", (msg) => {
+      toast.error(msg || "Something went wrong");
+    });
 
     return () => {
       socket.off("gameStart");
@@ -108,7 +121,7 @@ export default function App() {
    * LEADERBOARD
    */
   useEffect(() => {
-    fetch("http://localhost:3000/leaderboard")
+    fetch(`${BACKEND_URL}/leaderboard`)
       .then((res) => res.json())
       .then(setLeaderboard)
       .catch(() => {});
@@ -138,31 +151,42 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <h1>4 in a Row</h1>
+    <>
+      <div className="app">
+        <h1>4 in a Row</h1>
 
-      <div className="info">
-        <p>Status: {status}</p>
-        <p>Your Symbol: {mySymbol ?? "-"}</p>
-        <p>Turn: {currentTurn ?? "-"}</p>
+        <div className="info">
+          <p>Status: {status}</p>
+          <p>Your Symbol: {mySymbol ?? "-"}</p>
+          <p>Turn: {currentTurn ?? "-"}</p>
+        </div>
+
+        <Board board={board} onColumnClick={handleColumnClick} />
+
+        <div className="leaderboard">
+          <h2>Leaderboard</h2>
+          {leaderboard.length === 0 ? (
+            <p>No games played yet</p>
+          ) : (
+            <ol>
+              {leaderboard.map((e, i) => (
+                <li key={i}>
+                  {e.player} — {e.wins} wins
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
       </div>
 
-      <Board board={board} onColumnClick={handleColumnClick} />
-
-      <div className="leaderboard">
-        <h2>Leaderboard</h2>
-        {leaderboard.length === 0 ? (
-          <p>No games played yet</p>
-        ) : (
-          <ol>
-            {leaderboard.map((e, i) => (
-              <li key={i}>
-                {e.player} — {e.wins} wins
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
-    </div>
+      <ToastContainer
+        position="top-center"
+        autoClose={4000}
+        hideProgressBar
+        pauseOnHover={false}
+        closeOnClick
+        theme="dark"
+      />
+    </>
   );
 }

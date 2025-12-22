@@ -1,20 +1,27 @@
+require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 
+const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+
 const app = express();
 const server = http.createServer(app);
 
 // Socket.IO server for real-time gameplay
 const io = new Server(server, {
-  cors: { origin: "*" },
+  cors: {
+    origin: CLIENT_URL,
+  },
 });
 
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({ origin: CLIENT_URL }));
 app.use(express.json());
 app.use("/leaderboard", require("./routes/leaderboard"));
+
+
 
 const Game = require("./game/Game");
 const { saveFinishedGame } = require("./services/gameService");
@@ -168,6 +175,12 @@ io.on("connection", (socket) => {
         analytics.gameFinished(gameId, state.winner, game.startedAt);
         await saveFinishedGame(gameId, game);
         games.delete(gameId);
+
+        waitingPlayer = null;
+        if (waitingTimeout) {
+          clearTimeout(waitingTimeout);
+          waitingTimeout = null;
+        }
       }
 
       // Broadcast updated state to both players
@@ -186,6 +199,18 @@ io.on("connection", (socket) => {
    */
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
+
+    // If a waiting player disconnects, cancel lobby state
+    if (waitingPlayer && waitingPlayer.socket.id === socket.id) {
+      waitingPlayer = null;
+
+      if (waitingTimeout) {
+        clearTimeout(waitingTimeout);
+        waitingTimeout = null;
+      }
+
+      console.log("Waiting player disconnected — lobby reset");
+    }
 
     const gameId = socketToGame.get(socket.id);
     const username = socketToUsername.get(socket.id);
@@ -218,6 +243,9 @@ io.on("connection", (socket) => {
       game.winner = winner;
       
       io.to(gameId).emit("gameState", game.getState());
+      if (!game.winner || !game.winner.displayName) {
+        return;
+      }
       await saveFinishedGame(gameId, game);
       games.delete(gameId);
 
