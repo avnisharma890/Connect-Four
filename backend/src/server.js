@@ -5,22 +5,29 @@ const cors = require("cors");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
-
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO server for real-time gameplay
+const ALLOWED_ORIGIN =
+  process.env.FRONTEND_URL ||
+  process.env.CLIENT_URL ||
+  "http://localhost:5173";
+
 const io = new Server(server, {
   cors: {
-    origin: CLIENT_URL,
+    origin: ALLOWED_ORIGIN,
+    credentials: true,
   },
 });
 
-app.use(cors({ origin: CLIENT_URL }));
+app.use(
+  cors({
+    origin: ALLOWED_ORIGIN,
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use("/leaderboard", require("./routes/leaderboard"));
-
 
 
 const Game = require("./game/Game");
