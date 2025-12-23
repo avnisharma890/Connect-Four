@@ -5,11 +5,11 @@ const router = express.Router();
 
 router.get("/", async (req, res) => {
   try {
-    const leaderboard = await getLeaderboard();
-    res.json(leaderboard);
+    const data = await getLeaderboard();
+    res.json(Array.isArray(data) ? data : []);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to fetch leaderboard" });
+    console.error("Leaderboard error:", err);
+    res.status(200).json([]);
   }
 });
 

@@ -165,9 +165,8 @@ export default function App() {
 
         <div className="leaderboard">
           <h2>Leaderboard</h2>
-          {leaderboard.length === 0 ? (
-            <p>No games played yet</p>
-          ) : (
+
+          {Array.isArray(leaderboard) && leaderboard.length > 0 ? (
             <ol>
               {leaderboard.map((e, i) => (
                 <li key={i}>
@@ -175,6 +174,8 @@ export default function App() {
                 </li>
               ))}
             </ol>
+          ) : (
+            <p>No games played yet</p>
           )}
         </div>
       </div>
