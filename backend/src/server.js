@@ -180,7 +180,13 @@ io.on("connection", (socket) => {
         if (!games.has(gameId)) return;
 
         analytics.gameFinished(gameId, state.winner, game.startedAt);
-        await saveFinishedGame(gameId, game);
+        
+        try {
+          await saveFinishedGame(gameId, game);
+        } catch (err) {
+          console.error("Failed to persist finished game:", err.message);
+        }
+
         games.delete(gameId);
 
         waitingPlayer = null;
