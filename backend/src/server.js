@@ -206,7 +206,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  /**
+    /**
    * DISCONNECT
    * Starts a 30s grace period for reconnection
    */
@@ -248,25 +248,32 @@ io.on("connection", (socket) => {
 
       game.status = "FINISHED";
 
-      const winner =
+      const winnerPlayer =
         game.players.X.playerId === playerId
-          ? game.players.O.username
-          : game.players.X.username;
+          ? game.players.O
+          : game.players.X;
 
-      game.winner = winner;
-      
+      game.winner = {
+        playerId: winnerPlayer.playerId,
+        displayName: winnerPlayer.username,
+      };
+
       io.to(gameId).emit("gameState", game.getState());
-      if (!game.winner || !game.winner.displayName) {
-        return;
-      }
-      await saveFinishedGame(gameId, game);
-      games.delete(gameId);
+      io.to(gameId).emit("gameOver", { winner: game.winner });
 
+      try {
+        await saveFinishedGame(gameId, game);
+      } catch (err) {
+        console.error("Failed to persist forfeited game:", err.message);
+      }
+
+      games.delete(gameId);
       disconnectTimers.delete(key);
     }, 30000);
 
     disconnectTimers.set(key, timeout);
   });
+
 
   /**
    * REJOIN
