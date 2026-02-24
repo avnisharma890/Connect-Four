@@ -2,7 +2,7 @@ import Cell from "./Cell";
 
 export default function Board({ board, onColumnClick }) {
   return (
-    <div className="board">
+    <div className="board" role="grid">
       {board.map((row, rowIdx) =>
         row.map((cell, colIdx) => (
           <Cell
